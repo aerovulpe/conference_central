@@ -37,8 +37,13 @@ import com.googlecode.objectify.cmd.Query;
 /**
  * Defines conference APIs.
  */
-@Api(name = "conference", version = "v1", scopes = { Constants.EMAIL_SCOPE }, clientIds = {
-		Constants.WEB_CLIENT_ID, Constants.API_EXPLORER_CLIENT_ID }, description = "API for the Conference Central Backend application.")
+@Api(name = "conference", version = "v1", scopes = { Constants.EMAIL_SCOPE },
+     clientIds = {
+	Constants.WEB_CLIENT_ID, Constants.ANDROID_CLIENT_ID,
+	Constants.API_EXPLORER_CLIENT_ID
+},
+     audiences = {Constants.ANDROID_AUDIENCE},
+     description = "API for the Conference Central Backend application.")
 public class ConferenceApi {
 
 	/*
@@ -69,7 +74,7 @@ public class ConferenceApi {
 	// Pass the ProfileForm parameter
 	// Pass the User parameter
 	public Profile saveProfile(final User user, ProfileForm profileForm)
-			throws UnauthorizedException {
+	throws UnauthorizedException {
 
 		String userId = null;
 		String mainEmail = null;
@@ -94,7 +99,7 @@ public class ConferenceApi {
 			teeShirtSize = profileForm.getTeeShirtSize();
 
 		Profile profile = ofy().load().key(Key.create(Profile.class, userId))
-				.now();
+		                  .now();
 		if (profile != null) {
 			profile = getProfile(user);
 			profile.update(displayName, teeShirtSize);
@@ -104,7 +109,7 @@ public class ConferenceApi {
 			// by calling extractDefaultDisplayNameFromEmail(...)
 			if (displayName == null)
 				displayName = extractDefaultDisplayNameFromEmail(user
-						.getEmail());
+				                                                 .getEmail());
 
 			// Create a new Profile entity from the
 			// userId, displayName, mainEmail and teeShirtSize
@@ -117,6 +122,28 @@ public class ConferenceApi {
 		// Return the profile
 		return profile;
 	}
+
+	/**
+	 * This is an ugly workaround for null userId for Android clients.
+	 *
+	 * @param user A User object injected by the cloud endpoints.
+	 * @return the App Engine userId for the user.
+	 */
+	private static String getUserId(User user) {
+		String userId = user.getUserId();
+		if (userId == null) {
+			LOG.info("userId is null, so trying to obtain it from the datastore.");
+			AppEngineUser appEngineUser = new AppEngineUser(user);
+			ofy().save().entity(appEngineUser).now();
+			// Begin new session for not using session cache.
+			Objectify objectify = ofy().factory().begin();
+			AppEngineUser savedUser = objectify.load().key(appEngineUser.getKey()).now();
+			userId = savedUser.getUser().getUserId();
+			LOG.info("Obtained the userId: " + userId);
+		}
+		return userId;
+	}
+
 
 	/**
 	 * Returns a Profile object associated with the given user object. The cloud
@@ -144,21 +171,21 @@ public class ConferenceApi {
 	/**
 	 * Gets the Profile entity for the current user or creates it if it doesn't
 	 * exist
-	 * 
+	 *
 	 * @param user
 	 * @return user's Profile
 	 */
 	private static Profile getProfileFromUser(User user) {
 		// First fetch the user's Profile from the datastore.
 		Profile profile = ofy().load()
-				.key(Key.create(Profile.class, user.getUserId())).now();
+		                  .key(Key.create(Profile.class, user.getUserId())).now();
 		if (profile == null) {
 			// Create a new Profile if it doesn't exist.
 			// Use default displayName and teeShirtSize
 			String email = user.getEmail();
 			profile = new Profile(user.getUserId(),
-					extractDefaultDisplayNameFromEmail(email), email,
-					TeeShirtSize.NOT_SPECIFIED);
+			                      extractDefaultDisplayNameFromEmail(email), email,
+			                      TeeShirtSize.NOT_SPECIFIED);
 		}
 		return profile;
 	}
@@ -177,7 +204,7 @@ public class ConferenceApi {
 	 */
 	@ApiMethod(name = "createConference", path = "conference", httpMethod = HttpMethod.POST)
 	public Conference createConference(final User user,
-			final ConferenceForm conferenceForm) throws UnauthorizedException {
+	                                   final ConferenceForm conferenceForm) throws UnauthorizedException {
 		if (user == null) {
 			throw new UnauthorizedException("Authorization required");
 		}
@@ -185,59 +212,59 @@ public class ConferenceApi {
 		Conference conference = ofy().transact(new Work<Conference>() {
 			@Override
 			public Conference run() {
-				// Get the userId of the logged in User
-				String userId = user.getUserId();
+			    // Get the userId of the logged in User
+			    String userId = user.getUserId();
 
-				// Get the key for the User's Profile
-				Key<Profile> profileKey = Key.create(Profile.class, userId);
+			    // Get the key for the User's Profile
+			    Key<Profile> profileKey = Key.create(Profile.class, userId);
 
-				// Allocate a key for the conference -- let App Engine allocate
-				// the ID
-				// Don't forget to include the parent Profile in the allocated
-				// ID
-				final Key<Conference> conferenceKey = OfyService.factory()
-						.allocateId(profileKey, Conference.class);
+			    // Allocate a key for the conference -- let App Engine allocate
+			    // the ID
+			    // Don't forget to include the parent Profile in the allocated
+			    // ID
+			    final Key<Conference> conferenceKey = OfyService.factory()
+			                                          .allocateId(profileKey, Conference.class);
 
-				// Get the Conference Id from the Key
-				final long conferenceId = conferenceKey.getId();
+			    // Get the Conference Id from the Key
+			    final long conferenceId = conferenceKey.getId();
 
-				// Get the existing Profile entity for the current user if there
-				// is one
-				// Otherwise create a new Profile entity with default values
-				Profile profile = getProfileFromUser(user);
+			    // Get the existing Profile entity for the current user if there
+			    // is one
+			    // Otherwise create a new Profile entity with default values
+			    Profile profile = getProfileFromUser(user);
 
-				// Create a new Conference Entity, specifying the user's Profile
-				// entity
-				// as the parent of the conference
-				Conference conference = new Conference(conferenceId, userId,
-						conferenceForm);
+			    // Create a new Conference Entity, specifying the user's Profile
+			    // entity
+			    // as the parent of the conference
+			    Conference conference = new Conference(conferenceId, userId,
+			                                           conferenceForm);
 
-				// Save Conference and Profile Entities
-				ofy().save().entities(conference, profile).now();
-				
-				return conference;
+			    // Save Conference and Profile Entities
+			    ofy().save().entities(conference, profile).now();
+
+			    return conference;
 			}
 		});
 
 		QueueFactory.getQueue("email-queue").add(
-				ofy().getTransaction(),
-				TaskOptions.Builder.withUrl("/task/send_confirmation_email")
-						.param("email", user.getEmail())
-						.param("conferenceInfo", conference.toString()));
+		    ofy().getTransaction(),
+		    TaskOptions.Builder.withUrl("/task/send_confirmation_email")
+		    .param("email", user.getEmail())
+		    .param("conferenceInfo", conference.toString()));
 
 		return conference;
 	}
 
 	@ApiMethod(name = "queryConferences", path = "queryConferences", httpMethod = HttpMethod.POST)
 	public List<Conference> queryConferences(
-			ConferenceQueryForm conferenceQueryForm) {
+	    ConferenceQueryForm conferenceQueryForm) {
 		Iterable<Conference> conferenceIterable = conferenceQueryForm
-				.getQuery();
+		                                          .getQuery();
 		List<Conference> result = new ArrayList<>();
-		List<Key<Profile>> organizersKeyList = new ArrayList<>();
+		List<Key<Profile> > organizersKeyList = new ArrayList<>();
 		for (Conference conference : conferenceIterable) {
 			organizersKeyList.add(Key.create(Profile.class,
-					conference.getOrganizerUserId()));
+			                                 conference.getOrganizerUserId()));
 			result.add(conference);
 		}
 		// To avoid separate datastore gets for each Conference, pre-fetch the
@@ -248,20 +275,20 @@ public class ConferenceApi {
 
 	@ApiMethod(name = "getConferencesCreated", path = "getConferencesCreated", httpMethod = HttpMethod.GET)
 	public List<Conference> getConferencesCreated(User user)
-			throws UnauthorizedException {
+	throws UnauthorizedException {
 		if (user == null) {
 			throw new UnauthorizedException("Authorization required");
 		}
 		return ofy().load().type(Conference.class)
-				.ancestor(Key.create(Profile.class, user.getUserId()))
-				.order("name").list();
+		       .ancestor(Key.create(Profile.class, user.getUserId()))
+		       .order("name").list();
 	}
 
 	@ApiMethod(name = "registerForConference", path = "conference/{websafeConferenceKey}/registration", httpMethod = HttpMethod.PUT)
 	public WrappedBoolean registerForConference(final User user,
-			@Named("websafeConferenceKey") final String websafeConferenceKey)
-			throws UnauthorizedException, NotFoundException,
-			ForbiddenException, ConflictException {
+	                                            @Named("websafeConferenceKey") final String websafeConferenceKey)
+	throws UnauthorizedException, NotFoundException,
+	ForbiddenException, ConflictException {
 		// If not signed in, throw a 401 error.
 		if (user == null) {
 			throw new UnauthorizedException("Authorization required");
@@ -270,47 +297,47 @@ public class ConferenceApi {
 		WrappedBoolean result = ofy().transact(new Work<WrappedBoolean>() {
 			@Override
 			public WrappedBoolean run() {
-				try {
+			    try {
 
-					// Get the conference key
-					Key<Conference> conferenceKey = Key
-							.create(websafeConferenceKey);
+			        // Get the conference key
+			        Key<Conference> conferenceKey = Key
+			                                        .create(websafeConferenceKey);
 
-					// Get the Conference entity from the datastore
-					Conference conference = ofy().load().key(conferenceKey)
-							.now();
+			        // Get the Conference entity from the datastore
+			        Conference conference = ofy().load().key(conferenceKey)
+			                                .now();
 
-					// 404 when there is no Conference with the given
-					// conferenceId.
-					if (conference == null) {
-						return new WrappedBoolean(false,
-								"No Conference found with key: "
-										+ websafeConferenceKey);
+			        // 404 when there is no Conference with the given
+			        // conferenceId.
+			        if (conference == null) {
+			            return new WrappedBoolean(false,
+			                                      "No Conference found with key: "
+			                                      + websafeConferenceKey);
 					}
 
-					// Get the user's Profile entity
-					Profile profile = getProfileFromUser(user);
+			        // Get the user's Profile entity
+			        Profile profile = getProfileFromUser(user);
 
-					// Has the user already registered to attend this
-					// conference?
-					if (profile.getConferenceKeysToAttend().contains(
-							websafeConferenceKey)) {
-						return new WrappedBoolean(false, "Already registered");
+			        // Has the user already registered to attend this
+			        // conference?
+			        if (profile.getConferenceKeysToAttend().contains(
+			                websafeConferenceKey)) {
+			            return new WrappedBoolean(false, "Already registered");
 					} else if (conference.getSeatsAvailable() <= 0) {
-						return new WrappedBoolean(false, "No seats available");
+			            return new WrappedBoolean(false, "No seats available");
 					} else {
-						// All looks good, go ahead and book the seat
-						profile.addToConferenceKeysToAttend(websafeConferenceKey);
-						conference.bookSeats(1);
+			            // All looks good, go ahead and book the seat
+			            profile.addToConferenceKeysToAttend(websafeConferenceKey);
+			            conference.bookSeats(1);
 
-						// Save the Conference and Profile entities
-						ofy().save().entities(profile, conference).now();
-						// We are booked!
-						return new WrappedBoolean(true);
+			            // Save the Conference and Profile entities
+			            ofy().save().entities(profile, conference).now();
+			            // We are booked!
+			            return new WrappedBoolean(true);
 					}
 
 				} catch (Exception e) {
-					return new WrappedBoolean(false, "Unknown exception");
+			        return new WrappedBoolean(false, "Unknown exception");
 
 				}
 			}
@@ -341,18 +368,18 @@ public class ConferenceApi {
 	 */
 	@ApiMethod(name = "getConferencesToAttend", path = "getConferencesToAttend", httpMethod = HttpMethod.GET)
 	public Collection<Conference> getConferencesToAttend(final User user)
-			throws UnauthorizedException, NotFoundException {
+	throws UnauthorizedException, NotFoundException {
 		// If not signed in, throw a 401 error.
 		if (user == null) {
 			throw new UnauthorizedException("Authorization required");
 		}
 		Profile profile = ofy().load()
-				.key(Key.create(Profile.class, user.getUserId())).now();
+		                  .key(Key.create(Profile.class, user.getUserId())).now();
 		if (profile == null) {
 			throw new NotFoundException("Profile doesn't exist.");
 		}
 		List<String> keyStringsToAttend = profile.getConferenceKeysToAttend();
-		List<Key<Conference>> keysToAttend = new ArrayList<>();
+		List<Key<Conference> > keysToAttend = new ArrayList<>();
 		for (String keyString : keyStringsToAttend) {
 			keysToAttend.add(Key.<Conference> create(keyString));
 		}
@@ -376,9 +403,9 @@ public class ConferenceApi {
 	 */
 	@ApiMethod(name = "unregisterFromConference", path = "conference/{websafeConferenceKey}/registration", httpMethod = HttpMethod.DELETE)
 	public WrappedBoolean unregisterFromConference(final User user,
-			@Named("websafeConferenceKey") final String websafeConferenceKey)
-			throws UnauthorizedException, NotFoundException,
-			ForbiddenException, ConflictException {
+	                                               @Named("websafeConferenceKey") final String websafeConferenceKey)
+	throws UnauthorizedException, NotFoundException,
+	ForbiddenException, ConflictException {
 		// If not signed in, throw a 401 error.
 		if (user == null) {
 			throw new UnauthorizedException("Authorization required");
@@ -387,46 +414,46 @@ public class ConferenceApi {
 		WrappedBoolean result = ofy().transact(new Work<WrappedBoolean>() {
 			@Override
 			public WrappedBoolean run() {
-				try {
+			    try {
 
-					// Get the conference key
-					Key<Conference> conferenceKey = Key
-							.create(websafeConferenceKey);
+			        // Get the conference key
+			        Key<Conference> conferenceKey = Key
+			                                        .create(websafeConferenceKey);
 
-					// Get the Conference entity from the datastore
-					Conference conference = ofy().load().key(conferenceKey)
-							.now();
+			        // Get the Conference entity from the datastore
+			        Conference conference = ofy().load().key(conferenceKey)
+			                                .now();
 
-					// 404 when there is no Conference with the given
-					// conferenceId.
-					if (conference == null) {
-						return new WrappedBoolean(false,
-								"No Conference found with key: "
-										+ websafeConferenceKey);
+			        // 404 when there is no Conference with the given
+			        // conferenceId.
+			        if (conference == null) {
+			            return new WrappedBoolean(false,
+			                                      "No Conference found with key: "
+			                                      + websafeConferenceKey);
 					}
 
-					// Get the user's Profile entity
-					Profile profile = getProfileFromUser(user);
+			        // Get the user's Profile entity
+			        Profile profile = getProfileFromUser(user);
 
-					// Has the user already registered to attend this
-					// conference?
-					if (!profile.getConferenceKeysToAttend().contains(
-							websafeConferenceKey)) {
-						return new WrappedBoolean(false, "Not registered");
+			        // Has the user already registered to attend this
+			        // conference?
+			        if (!profile.getConferenceKeysToAttend().contains(
+			                websafeConferenceKey)) {
+			            return new WrappedBoolean(false, "Not registered");
 					} else {
-						// All looks good
-						profile.unregisterFromConference(websafeConferenceKey);
-						;
-						conference.giveBackSeats(1);
+			            // All looks good
+			            profile.unregisterFromConference(websafeConferenceKey);
+			            ;
+			            conference.giveBackSeats(1);
 
-						// Save the Conference and Profile entities
-						ofy().save().entities(profile, conference).now();
-						// We are booked!
-						return new WrappedBoolean(true);
+			            // Save the Conference and Profile entities
+			            ofy().save().entities(profile, conference).now();
+			            // We are booked!
+			            return new WrappedBoolean(true);
 					}
 
 				} catch (Exception e) {
-					return new WrappedBoolean(false, "Unknown exception");
+			        return new WrappedBoolean(false, "Unknown exception");
 				}
 			}
 		});
@@ -444,7 +471,7 @@ public class ConferenceApi {
 	@ApiMethod(name = "getAnnouncement", path = "announcement", httpMethod = HttpMethod.GET)
 	public Announcement getAnnouncement() {
 		Object message = MemcacheServiceFactory.getMemcacheService().get(
-				Constants.MEMCACHE_ANNOUNCEMENTS_KEY);
+		    Constants.MEMCACHE_ANNOUNCEMENTS_KEY);
 
 		if (message != null)
 			return new Announcement(message.toString());
@@ -454,8 +481,8 @@ public class ConferenceApi {
 
 	@ApiMethod(name = "playground", path = "conference/play", httpMethod = HttpMethod.GET)
 	public List<Conference> playground(@Named("city") @Nullable String city,
-			@Named("month") @Nullable Integer month,
-			@Named("minSeats") @Nullable Integer minSeats) {
+	                                   @Named("month") @Nullable Integer month,
+	                                   @Named("minSeats") @Nullable Integer minSeats) {
 		Query<Conference> query = ofy().load().type(Conference.class);
 		if (city != null)
 			query = query.filter("city =", city);
@@ -470,13 +497,13 @@ public class ConferenceApi {
 
 	@ApiMethod(name = "getConference", path = "conference/{websafeConferenceKey}", httpMethod = HttpMethod.GET)
 	public Conference getConference(
-			@Named("websafeConferenceKey") final String websafeConferenceKey)
-			throws NotFoundException {
+	    @Named("websafeConferenceKey") final String websafeConferenceKey)
+	throws NotFoundException {
 		Key<Conference> key = Key.create(websafeConferenceKey);
 		Conference conference = ofy().load().key(key).now();
 		if (conference == null)
 			throw new NotFoundException("No Conference with key: "
-					+ websafeConferenceKey);
+			                            + websafeConferenceKey);
 
 		return conference;
 	}
