@@ -22,6 +22,7 @@ import com.google.appengine.api.taskqueue.TaskOptions;
 import com.google.appengine.api.users.User;
 import com.google.devrel.training.conference.Constants;
 import com.google.devrel.training.conference.domain.Announcement;
+import com.google.devrel.training.conference.domain.AppEngineUser;
 import com.google.devrel.training.conference.domain.Conference;
 import com.google.devrel.training.conference.domain.Profile;
 import com.google.devrel.training.conference.form.ConferenceForm;
@@ -31,6 +32,7 @@ import com.google.devrel.training.conference.form.ProfileForm.TeeShirtSize;
 import com.google.devrel.training.conference.service.OfyService;
 import com.google.common.collect.ImmutableList;
 import com.googlecode.objectify.Key;
+import com.googlecode.objectify.Objectify;
 import com.googlecode.objectify.Work;
 import com.googlecode.objectify.cmd.Query;
 
@@ -132,14 +134,12 @@ public class ConferenceApi {
 	private static String getUserId(User user) {
 		String userId = user.getUserId();
 		if (userId == null) {
-			LOG.info("userId is null, so trying to obtain it from the datastore.");
 			AppEngineUser appEngineUser = new AppEngineUser(user);
 			ofy().save().entity(appEngineUser).now();
 			// Begin new session for not using session cache.
 			Objectify objectify = ofy().factory().begin();
 			AppEngineUser savedUser = objectify.load().key(appEngineUser.getKey()).now();
 			userId = savedUser.getUser().getUserId();
-			LOG.info("Obtained the userId: " + userId);
 		}
 		return userId;
 	}
